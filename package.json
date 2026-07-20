@@ -1,0 +1,40 @@
+{
+  "name": "desktop-note-widget",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "lint": "oxlint",
+    "preview": "vite preview",
+    "tauri": "tauri",
+    "env:check": "node ./scripts/check-windows-env.mjs",
+    "env:install-cpp": "powershell -ExecutionPolicy Bypass -File ./scripts/install-windows-cpp.ps1",
+    "desktop:dev": "npm run env:check && powershell -ExecutionPolicy Bypass -File ./scripts/run-tauri-in-vsdev.ps1 -Mode dev",
+    "desktop:build": "npm run env:check && powershell -ExecutionPolicy Bypass -File ./scripts/run-tauri-in-vsdev.ps1 -Mode build",
+    "desktop:bundle": "npm run env:check && powershell -ExecutionPolicy Bypass -File ./scripts/run-tauri-in-vsdev.ps1 -Mode build-bundle",
+    "desktop:run": "powershell -ExecutionPolicy Bypass -File ./scripts/run-app.ps1"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.11.1",
+    "@tauri-apps/plugin-autostart": "^2.5.1",
+    "@tauri-apps/plugin-sql": "^2.4.0",
+    "@tauri-apps/plugin-window-state": "^2.4.1",
+    "date-fns": "^4.4.0",
+    "lucide-react": "^1.25.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "zustand": "^5.0.14"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.11.4",
+    "@types/node": "^24.13.2",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.3",
+    "oxlint": "^1.71.0",
+    "typescript": "~6.0.2",
+    "vite": "^8.1.1"
+  }
+}
