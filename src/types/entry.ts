@@ -27,4 +27,5 @@ export type AppSettings = {
   opacity: number
   alwaysOnTop: boolean
   uiMode: UiMode
+  backgroundColor: string
 }

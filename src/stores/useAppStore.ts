@@ -10,12 +10,19 @@ import {
   updateEntry,
 } from '../lib/db'
 import type { AppSettings, EntryWithTags, FilterMode, Tag, UiMode } from '../types/entry'
+import {
+  deleteBackgroundImage,
+  loadBackgroundImage,
+  normalizeBackgroundColor,
+  saveBackgroundImage,
+} from '../utils/backgroundStorage'
 import { toLocalDateKey } from '../utils/date'
 
 const defaultSettings: AppSettings = {
   opacity: 0.75,
   alwaysOnTop: true,
   uiMode: 'simple',
+  backgroundColor: '#eef2f8',
 }
 
 function clampOpacity(value: unknown, fallback: number) {
@@ -31,6 +38,10 @@ function loadSettings(): AppSettings {
   try {
     const parsed = { ...defaultSettings, ...(JSON.parse(raw) as Partial<AppSettings>) }
     parsed.opacity = clampOpacity(parsed.opacity, defaultSettings.opacity)
+    parsed.backgroundColor = normalizeBackgroundColor(
+      parsed.backgroundColor,
+      defaultSettings.backgroundColor,
+    )
     return parsed
   } catch {
     return defaultSettings
@@ -49,6 +60,9 @@ type StoreState = {
   selectedDate: string | null
   selectedTagId: string | null
   settings: AppSettings
+  backgroundImageUrl: string | null
+  backgroundImageLoading: boolean
+  backgroundError: string | null
   loading: boolean
   error: string | null
   initialize: () => Promise<void>
@@ -72,6 +86,9 @@ type StoreState = {
   removeEntry: (entryId: string) => Promise<void>
   addTag: (name: string) => Promise<Tag | null>
   setOpacity: (opacity: number) => void
+  setBackgroundColor: (color: string) => void
+  setBackgroundImage: (file: File) => Promise<void>
+  removeBackgroundImage: () => Promise<void>
   setAlwaysOnTopSetting: (alwaysOnTop: boolean) => void
   setUiMode: (uiMode: UiMode) => void
   toggleUiMode: () => void
@@ -92,11 +109,28 @@ export const useAppStore = create<StoreState>((set, get) => ({
   selectedDate: toLocalDateKey(),
   selectedTagId: null,
   settings: loadSettings(),
+  backgroundImageUrl: null,
+  backgroundImageLoading: true,
+  backgroundError: null,
   loading: true,
   error: null,
 
   async initialize() {
     set({ loading: true, error: null })
+    try {
+      const image = await loadBackgroundImage()
+      const previousUrl = get().backgroundImageUrl
+      const backgroundImageUrl = image ? URL.createObjectURL(image) : null
+      if (previousUrl && previousUrl !== backgroundImageUrl) URL.revokeObjectURL(previousUrl)
+      set({ backgroundImageUrl, backgroundImageLoading: false, backgroundError: null })
+    } catch (error) {
+      console.error('loadBackgroundImage failed', error)
+      set({
+        backgroundImageLoading: false,
+        backgroundError: `背景图片加载失败：${toErrorMessage(error)}`,
+      })
+    }
+
     try {
       await bootstrapDb()
       await get().refresh()
@@ -287,6 +321,44 @@ export const useAppStore = create<StoreState>((set, get) => ({
     const settings = { ...get().settings, opacity: clampOpacity(opacity, defaultSettings.opacity) }
     persistSettings(settings)
     set({ settings })
+  },
+
+  setBackgroundColor(color) {
+    const settings = {
+      ...get().settings,
+      backgroundColor: normalizeBackgroundColor(color, get().settings.backgroundColor),
+    }
+    persistSettings(settings)
+    set({ settings })
+  },
+
+  async setBackgroundImage(file) {
+    set({ backgroundImageLoading: true, backgroundError: null })
+    try {
+      await saveBackgroundImage(file)
+      const backgroundImageUrl = URL.createObjectURL(file)
+      const previousUrl = get().backgroundImageUrl
+      set({ backgroundImageUrl, backgroundImageLoading: false })
+      if (previousUrl) URL.revokeObjectURL(previousUrl)
+    } catch (error) {
+      const message = `背景图片保存失败：${toErrorMessage(error)}`
+      set({ backgroundImageLoading: false, backgroundError: message })
+      throw error
+    }
+  },
+
+  async removeBackgroundImage() {
+    set({ backgroundImageLoading: true, backgroundError: null })
+    try {
+      await deleteBackgroundImage()
+      const previousUrl = get().backgroundImageUrl
+      set({ backgroundImageUrl: null, backgroundImageLoading: false })
+      if (previousUrl) URL.revokeObjectURL(previousUrl)
+    } catch (error) {
+      const message = `背景图片移除失败：${toErrorMessage(error)}`
+      set({ backgroundImageLoading: false, backgroundError: message })
+      throw error
+    }
   },
 
   setAlwaysOnTopSetting(alwaysOnTop) {

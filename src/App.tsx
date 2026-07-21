@@ -1,7 +1,7 @@
 import { isTauri } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { disable, enable, isEnabled } from '@tauri-apps/plugin-autostart'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import './App.css'
 import { EntryList, type EntryListHandle } from './components/EntryList'
 import { SettingsPanel } from './components/SettingsPanel'
@@ -10,6 +10,7 @@ import { SimpleBoard } from './components/SimpleBoard'
 import { TitleBar } from './components/TitleBar'
 import { useAppStore } from './stores/useAppStore'
 import type { FilterMode, UiMode } from './types/entry'
+import { isDarkBackgroundColor } from './utils/backgroundStorage'
 import { filterStandardEntries } from './utils/date'
 
 function App() {
@@ -21,6 +22,9 @@ function App() {
     selectedDate,
     selectedTagId,
     settings,
+    backgroundImageUrl,
+    backgroundImageLoading,
+    backgroundError,
     loading,
     error,
     initialize,
@@ -35,6 +39,9 @@ function App() {
     removeEntry,
     addTag,
     setOpacity,
+    setBackgroundColor,
+    setBackgroundImage,
+    removeBackgroundImage,
     setAlwaysOnTopSetting,
     setUiMode,
     toggleUiMode,
@@ -45,6 +52,12 @@ function App() {
   const listRef = useRef<EntryListHandle>(null)
   const isSimple = settings.uiMode === 'simple'
   const runningInTauri = isTauri()
+  const appStyle = {
+    '--window-background-color': settings.backgroundColor,
+    '--window-background-image': backgroundImageUrl
+      ? `url("${backgroundImageUrl}")`
+      : 'none',
+  } as CSSProperties
 
   const filteredEntries = useMemo(
     () =>
@@ -148,7 +161,19 @@ function App() {
   }, [addEntry, isSimple, selectedEntryId])
 
   return (
-    <div className={isSimple ? 'app-shell app-shell--simple' : 'app-shell app-shell--standard'}>
+    <div
+      className={[
+        'app-shell',
+        isSimple ? 'app-shell--simple' : 'app-shell--standard',
+        backgroundImageUrl ? 'app-shell--has-background-image' : '',
+        !backgroundImageUrl && isDarkBackgroundColor(settings.backgroundColor)
+          ? 'app-shell--dark-background'
+          : '',
+      ]
+        .filter(Boolean)
+        .join(' ')}
+      style={appStyle}
+    >
       <TitleBar
         uiMode={settings.uiMode}
         alwaysOnTop={settings.alwaysOnTop}
@@ -164,10 +189,17 @@ function App() {
       {settingsOpen ? (
         <SettingsPanel
           opacity={settings.opacity}
+          backgroundColor={settings.backgroundColor}
+          backgroundImageUrl={backgroundImageUrl}
+          backgroundImageLoading={backgroundImageLoading}
+          backgroundError={backgroundError}
           alwaysOnTop={settings.alwaysOnTop}
           autostartEnabled={autostartEnabled}
           uiMode={settings.uiMode}
           onOpacityChange={setOpacity}
+          onBackgroundColorChange={setBackgroundColor}
+          onBackgroundImageChange={setBackgroundImage}
+          onRemoveBackgroundImage={removeBackgroundImage}
           onAlwaysOnTopChange={setAlwaysOnTopSetting}
           onAutostartChange={(checked) => void handleAutostartChange(checked)}
           onUiModeChange={(mode) => void handleUiModeChange(mode)}
