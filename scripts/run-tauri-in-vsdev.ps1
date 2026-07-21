@@ -25,7 +25,16 @@ if (-not (Test-Path $devCmd)) {
 }
 
 $projectRoot = Split-Path $PSScriptRoot -Parent
-$env:CARGO_TARGET_DIR = Join-Path $projectRoot "src-tauri\target"
+# Prefer a LocalAppData target dir so Windows app-control policies are less likely
+# to block freshly generated cargo build-script binaries under the repo path.
+$defaultTarget = Join-Path $env:LOCALAPPDATA "dandan-note-cargo-target"
+$targetDir = if ($env:DANDAN_CARGO_TARGET_DIR) {
+  $env:DANDAN_CARGO_TARGET_DIR
+} else {
+  $defaultTarget
+}
+New-Item -ItemType Directory -Force -Path $targetDir | Out-Null
+$env:CARGO_TARGET_DIR = $targetDir
 
 $tauriCommand = switch ($Mode) {
   "dev" { "npm run tauri -- dev" }

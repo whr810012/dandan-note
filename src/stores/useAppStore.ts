@@ -6,10 +6,11 @@ import {
   deleteEntry,
   listEntries,
   listTags,
-  replaceEntryTags,
+  saveEntryWithTags,
   updateEntry,
 } from '../lib/db'
 import type { AppSettings, EntryWithTags, FilterMode, Tag, UiMode } from '../types/entry'
+import { toLocalDateKey } from '../utils/date'
 
 const defaultSettings: AppSettings = {
   opacity: 0.75,
@@ -81,12 +82,14 @@ function toErrorMessage(error: unknown) {
   return String(error)
 }
 
+const saveQueues = new Map<string, Promise<void>>()
+
 export const useAppStore = create<StoreState>((set, get) => ({
   entries: [],
   tags: [],
   selectedEntryId: null,
   filterMode: 'all',
-  selectedDate: new Date().toISOString().slice(0, 10),
+  selectedDate: toLocalDateKey(),
   selectedTagId: null,
   settings: loadSettings(),
   loading: true,
@@ -126,7 +129,7 @@ export const useAppStore = create<StoreState>((set, get) => ({
 
   async addEntry() {
     try {
-      const today = new Date().toISOString().slice(0, 10)
+      const today = toLocalDateKey()
       const simple = get().settings.uiMode === 'simple'
       const entryId = await createEntry({
         title: simple ? '' : '新条目',
@@ -153,6 +156,8 @@ export const useAppStore = create<StoreState>((set, get) => ({
   setFilterMode(filterMode) {
     set({
       filterMode,
+      selectedDate:
+        filterMode === 'calendar' ? get().selectedDate ?? toLocalDateKey() : get().selectedDate,
       selectedTagId: filterMode === 'tag' ? get().selectedTagId : null,
     })
   },
@@ -166,13 +171,45 @@ export const useAppStore = create<StoreState>((set, get) => ({
   },
 
   async saveEntry(payload) {
+    const normalized = {
+      ...payload,
+      completed: payload.isTodo ? payload.completed : false,
+    }
+    const previous = saveQueues.get(payload.entryId) ?? Promise.resolve()
+    const task = previous.catch(() => undefined).then(async () => {
+      await saveEntryWithTags(normalized.entryId, normalized, normalized.tagIds)
+      const tags = get().tags.filter((tag) => normalized.tagIds.includes(tag.id))
+      const updatedAt = new Date().toISOString()
+      set((state) => ({
+        entries: state.entries.map((entry) =>
+          entry.id === normalized.entryId
+            ? {
+                ...entry,
+                title: normalized.title,
+                content: normalized.content,
+                dueDate: normalized.dueDate,
+                isTodo: normalized.isTodo,
+                completed: normalized.completed,
+                tags,
+                updatedAt,
+              }
+            : entry,
+        ),
+        error: null,
+      }))
+    })
+    saveQueues.set(payload.entryId, task)
+
     try {
-      await updateEntry(payload.entryId, payload)
-      await replaceEntryTags(payload.entryId, payload.tagIds)
-      await get().refresh()
+      await task
     } catch (error) {
       console.error('saveEntry failed', error)
       set({ error: `保存失败：${toErrorMessage(error)}` })
+      throw error
+    } finally {
+      if (saveQueues.get(payload.entryId) === task) {
+        saveQueues.delete(payload.entryId)
+      }
     }
   },
 
@@ -230,7 +267,14 @@ export const useAppStore = create<StoreState>((set, get) => ({
     try {
       const colors = ['#8b5cf6', '#14b8a6', '#f97316', '#ec4899', '#3b82f6']
       const tag = await createTag(name, colors[Math.floor(Math.random() * colors.length)])
-      await get().refresh()
+      if (tag) {
+        set((state) => ({
+          tags: state.tags.some((item) => item.id === tag.id)
+            ? state.tags
+            : [...state.tags, tag].sort((a, b) => a.name.localeCompare(b.name)),
+          error: null,
+        }))
+      }
       return tag
     } catch (error) {
       console.error('addTag failed', error)

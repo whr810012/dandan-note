@@ -1,14 +1,16 @@
-import { useEffect, useMemo, useState } from 'react'
+import { isTauri } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { disable, enable, isEnabled } from '@tauri-apps/plugin-autostart'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
-import { EntryEditor } from './components/EntryEditor'
-import { EntryList } from './components/EntryList'
+import { EntryList, type EntryListHandle } from './components/EntryList'
 import { SettingsPanel } from './components/SettingsPanel'
 import { Sidebar } from './components/Sidebar'
 import { SimpleBoard } from './components/SimpleBoard'
 import { TitleBar } from './components/TitleBar'
 import { useAppStore } from './stores/useAppStore'
+import type { FilterMode, UiMode } from './types/entry'
+import { filterStandardEntries } from './utils/date'
 
 function App() {
   const {
@@ -37,49 +39,56 @@ function App() {
     setUiMode,
     toggleUiMode,
   } = useAppStore()
+
   const [autostartEnabled, setAutostartEnabled] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
-
-  useEffect(() => {
-    void initialize()
-    void isEnabled().then(setAutostartEnabled).catch(() => setAutostartEnabled(false))
-  }, [initialize])
-
-  useEffect(() => {
-    document.documentElement.style.setProperty('--window-opacity', String(settings.opacity))
-    void getCurrentWindow().setAlwaysOnTop(settings.alwaysOnTop).catch(() => undefined)
-  }, [settings.alwaysOnTop, settings.opacity])
-
-  const selectedEntry = entries.find((entry) => entry.id === selectedEntryId) ?? null
+  const listRef = useRef<EntryListHandle>(null)
   const isSimple = settings.uiMode === 'simple'
+  const runningInTauri = isTauri()
 
-  const filteredEntries = useMemo(() => {
-    if (isSimple) return entries
+  const filteredEntries = useMemo(
+    () =>
+      filterStandardEntries(entries, {
+        mode: filterMode,
+        selectedDate,
+        selectedTagId,
+      }),
+    [entries, filterMode, selectedDate, selectedTagId],
+  )
 
-    const today = new Date().toISOString().slice(0, 10)
+  const flushThen = async (action: () => void | Promise<void>) => {
+    try {
+      await listRef.current?.flush()
+      await action()
+    } catch {
+      // 保存失败时保留当前编辑器，避免用户在不知情时丢失草稿。
+    }
+  }
 
-    return entries.filter((entry) => {
-      if (filterMode === 'all') return true
-      if (filterMode === 'today') {
-        return entry.dueDate === today || entry.createdAt.slice(0, 10) === today
-      }
-      if (filterMode === 'calendar') {
-        return selectedDate ? entry.dueDate === selectedDate : true
-      }
-      if (filterMode === 'tag') {
-        return selectedTagId
-          ? entry.tags.some((tag) => tag.id === selectedTagId)
-          : true
-      }
-      return true
+  const handleCreateEntry = () => flushThen(addEntry)
+  const handleFilterChange = (mode: FilterMode) => flushThen(() => setFilterMode(mode))
+  const handleDateChange = (date: string | null) => flushThen(() => setSelectedDate(date))
+  const handleTagSelect = (tagId: string) =>
+    flushThen(() => {
+      setSelectedTagId(tagId)
+      setFilterMode('tag')
     })
-  }, [entries, filterMode, isSimple, selectedDate, selectedTagId])
+  const handleUiModeChange = (mode: UiMode) => flushThen(() => setUiMode(mode))
+  const handleToggleUiMode = () => flushThen(toggleUiMode)
 
-  async function handleToggleAlwaysOnTop() {
-    setAlwaysOnTopSetting(!settings.alwaysOnTop)
+  const handleClose = async () => {
+    try {
+      await listRef.current?.flush()
+      if (runningInTauri) {
+        await getCurrentWindow().close()
+      }
+    } catch {
+      // 保存失败时窗口保持打开，编辑器会展示重试入口。
+    }
   }
 
   async function handleAutostartChange(checked: boolean) {
+    if (!runningInTauri) return
     try {
       if (checked) {
         await enable()
@@ -92,16 +101,64 @@ function App() {
     }
   }
 
+  useEffect(() => {
+    void initialize()
+    if (runningInTauri) {
+      void isEnabled().then(setAutostartEnabled).catch(() => setAutostartEnabled(false))
+    }
+  }, [initialize, runningInTauri])
+
+  useEffect(() => {
+    document.documentElement.style.setProperty('--window-opacity', String(settings.opacity))
+    if (runningInTauri) {
+      void getCurrentWindow().setAlwaysOnTop(settings.alwaysOnTop).catch(() => undefined)
+    }
+  }, [runningInTauri, settings.alwaysOnTop, settings.opacity])
+
+  useEffect(() => {
+    if (
+      !isSimple &&
+      selectedEntryId &&
+      !filteredEntries.some((entry) => entry.id === selectedEntryId)
+    ) {
+      selectEntry(filteredEntries[0]?.id ?? null)
+    }
+  }, [filteredEntries, isSimple, selectEntry, selectedEntryId])
+
+  useEffect(() => {
+    if (isSimple) return
+    const handleShortcut = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'n') {
+        event.preventDefault()
+        void (async () => {
+          try {
+            await listRef.current?.flush()
+            await addEntry()
+          } catch {
+            // 保留当前草稿。
+          }
+        })()
+      } else if (event.key === 'Escape' && selectedEntryId) {
+        event.preventDefault()
+        void listRef.current?.collapse()
+      }
+    }
+    window.addEventListener('keydown', handleShortcut)
+    return () => window.removeEventListener('keydown', handleShortcut)
+  }, [addEntry, isSimple, selectedEntryId])
+
   return (
-    <div className={isSimple ? 'app-shell app-shell--simple' : 'app-shell'}>
+    <div className={isSimple ? 'app-shell app-shell--simple' : 'app-shell app-shell--standard'}>
       <TitleBar
         uiMode={settings.uiMode}
         alwaysOnTop={settings.alwaysOnTop}
-        onToggleUiMode={toggleUiMode}
-        onToggleAlwaysOnTop={() => void handleToggleAlwaysOnTop()}
+        onToggleUiMode={handleToggleUiMode}
+        onToggleAlwaysOnTop={() => setAlwaysOnTopSetting(!settings.alwaysOnTop)}
         onToggleSettings={() => setSettingsOpen((open) => !open)}
-        onMinimize={() => void getCurrentWindow().minimize()}
-        onClose={() => void getCurrentWindow().close()}
+        onMinimize={() => {
+          if (runningInTauri) void getCurrentWindow().minimize()
+        }}
+        onClose={() => void handleClose()}
       />
 
       {settingsOpen ? (
@@ -111,14 +168,14 @@ function App() {
           autostartEnabled={autostartEnabled}
           uiMode={settings.uiMode}
           onOpacityChange={setOpacity}
-          onAlwaysOnTopChange={(checked) => setAlwaysOnTopSetting(checked)}
+          onAlwaysOnTopChange={setAlwaysOnTopSetting}
           onAutostartChange={(checked) => void handleAutostartChange(checked)}
-          onUiModeChange={setUiMode}
+          onUiModeChange={(mode) => void handleUiModeChange(mode)}
         />
       ) : null}
 
       {error ? (
-        <div className="error-banner">
+        <div className="error-banner" role="alert">
           <span>{error}</span>
           <button type="button" className="secondary-button" onClick={() => void initialize()}>
             重试
@@ -136,50 +193,50 @@ function App() {
           onDelete={removeEntry}
         />
       ) : (
-        <>
-          <div className="toolbar">
-            <input
-              className="toolbar__date"
-              type="date"
-              value={selectedDate ?? ''}
-              onChange={(event) => setSelectedDate(event.target.value)}
-            />
-            <span className="toolbar__hint">
-              {loading ? '正在加载本地数据…' : error ? error : `共 ${filteredEntries.length} 条`}
-            </span>
-          </div>
+        <div className="standard-workspace">
+          <Sidebar
+            filterMode={filterMode}
+            selectedDate={selectedDate}
+            selectedTagId={selectedTagId}
+            tags={tags}
+            onFilterChange={handleFilterChange}
+            onSelectDate={handleDateChange}
+            onSelectTag={handleTagSelect}
+            onCreateEntry={handleCreateEntry}
+          />
 
-          <div className="workspace">
-            <Sidebar
+          <main className="standard-content">
+            <div className="standard-content__heading">
+              <div>
+                <strong>
+                  {filterMode === 'today'
+                    ? '今天'
+                    : filterMode === 'all'
+                      ? '全部条目'
+                      : filterMode === 'calendar'
+                        ? '日期记录'
+                        : '标签记录'}
+                </strong>
+                <span>{filteredEntries.length} 项</span>
+              </div>
+              <span>点击条目原位编辑</span>
+            </div>
+
+            <EntryList
+              ref={listRef}
+              entries={filteredEntries}
+              allTags={tags}
+              selectedEntryId={selectedEntryId}
               filterMode={filterMode}
-              selectedTagId={selectedTagId}
-              tags={tags}
-              onFilterChange={setFilterMode}
-              onSelectTag={setSelectedTagId}
-              onCreateEntry={() => void addEntry()}
+              loading={loading}
+              onSelect={selectEntry}
+              onCreateEntry={handleCreateEntry}
+              onSave={saveEntry}
+              onDelete={removeEntry}
+              onCreateTag={addTag}
             />
-
-            <main className="content">
-              <section className="panel panel--list">
-                <EntryList
-                  entries={filteredEntries}
-                  selectedEntryId={selectedEntryId}
-                  onSelect={selectEntry}
-                />
-              </section>
-
-              <section className="panel panel--editor">
-                <EntryEditor
-                  entry={selectedEntry}
-                  allTags={tags}
-                  onSave={saveEntry}
-                  onDelete={removeEntry}
-                  onCreateTag={addTag}
-                />
-              </section>
-            </main>
-          </div>
-        </>
+          </main>
+        </div>
       )}
     </div>
   )

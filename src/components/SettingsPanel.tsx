@@ -36,6 +36,7 @@ export function SettingsPanel({
           <button
             type="button"
             className={uiMode === 'simple' ? 'mode-switch__btn active' : 'mode-switch__btn'}
+            aria-pressed={uiMode === 'simple'}
             onClick={() => onUiModeChange('simple')}
           >
             简易模式
@@ -43,6 +44,7 @@ export function SettingsPanel({
           <button
             type="button"
             className={uiMode === 'standard' ? 'mode-switch__btn active' : 'mode-switch__btn'}
+            aria-pressed={uiMode === 'standard'}
             onClick={() => onUiModeChange('standard')}
           >
             标准模式
@@ -62,6 +64,7 @@ export function SettingsPanel({
           max="100"
           step="1"
           value={percent}
+          aria-label="背景透明度"
           onChange={(event) => onOpacityChange(Number(event.target.value) / 100)}
         />
         <div className="setting-item__hint">0% 全透明 · 100% 不透明</div>
