@@ -10,11 +10,13 @@
   ],
   "permissions": [
     "autostart:default",
+    "allow-set-autostart",
     "window-state:default",
     "core:window:allow-start-dragging",
     "core:window:allow-set-always-on-top",
     "core:window:allow-minimize",
     "core:window:allow-close",
+    "core:window:allow-destroy",
     "core:window:allow-is-always-on-top"
   ]
 }

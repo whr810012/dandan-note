@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-set-autostart"
+description = "Allow toggling launch-at-startup"
+commands.allow = ["set_autostart"]

@@ -1,12 +1,12 @@
-import { isTauri } from '@tauri-apps/api/core'
+import { invoke, isTauri } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
-import { disable, enable, isEnabled } from '@tauri-apps/plugin-autostart'
+import { isEnabled } from '@tauri-apps/plugin-autostart'
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import './App.css'
 import { EntryList, type EntryListHandle } from './components/EntryList'
 import { SettingsPanel } from './components/SettingsPanel'
 import { Sidebar } from './components/Sidebar'
-import { SimpleBoard } from './components/SimpleBoard'
+import { SimpleBoard, type SimpleBoardHandle } from './components/SimpleBoard'
 import { TitleBar } from './components/TitleBar'
 import { useAppStore } from './stores/useAppStore'
 import type { FilterMode, UiMode } from './types/entry'
@@ -50,6 +50,7 @@ function App() {
   const [autostartEnabled, setAutostartEnabled] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const listRef = useRef<EntryListHandle>(null)
+  const simpleBoardRef = useRef<SimpleBoardHandle>(null)
   const isSimple = settings.uiMode === 'simple'
   const runningInTauri = isTauri()
   const appStyle = {
@@ -69,9 +70,16 @@ function App() {
     [entries, filterMode, selectedDate, selectedTagId],
   )
 
+  const flushPending = async () => {
+    await Promise.all([
+      listRef.current?.flush() ?? Promise.resolve(),
+      simpleBoardRef.current?.flush() ?? Promise.resolve(),
+    ])
+  }
+
   const flushThen = async (action: () => void | Promise<void>) => {
     try {
-      await listRef.current?.flush()
+      await flushPending()
       await action()
     } catch {
       // 保存失败时保留当前编辑器，避免用户在不知情时丢失草稿。
@@ -89,11 +97,14 @@ function App() {
   const handleUiModeChange = (mode: UiMode) => flushThen(() => setUiMode(mode))
   const handleToggleUiMode = () => flushThen(toggleUiMode)
 
+  const flushPendingRef = useRef(flushPending)
+  flushPendingRef.current = flushPending
+
   const handleClose = async () => {
     try {
-      await listRef.current?.flush()
+      await flushPending()
       if (runningInTauri) {
-        await getCurrentWindow().close()
+        await getCurrentWindow().destroy()
       }
     } catch {
       // 保存失败时窗口保持打开，编辑器会展示重试入口。
@@ -103,14 +114,11 @@ function App() {
   async function handleAutostartChange(checked: boolean) {
     if (!runningInTauri) return
     try {
-      if (checked) {
-        await enable()
-      } else {
-        await disable()
-      }
-      setAutostartEnabled(checked)
+      const actual = await invoke<boolean>('set_autostart', { enabled: checked })
+      setAutostartEnabled(actual)
     } catch {
-      setAutostartEnabled(false)
+      const actual = await isEnabled().catch(() => !checked)
+      setAutostartEnabled(actual)
     }
   }
 
@@ -120,6 +128,34 @@ function App() {
       void isEnabled().then(setAutostartEnabled).catch(() => setAutostartEnabled(false))
     }
   }, [initialize, runningInTauri])
+
+  useEffect(() => {
+    if (!runningInTauri) return
+    const currentWindow = getCurrentWindow()
+    let disposed = false
+    let unlisten: (() => void) | undefined
+
+    void currentWindow
+      .onCloseRequested(async (event) => {
+        event.preventDefault()
+        try {
+          await flushPendingRef.current()
+        } catch {
+          return
+        }
+        unlisten?.()
+        await currentWindow.destroy()
+      })
+      .then((fn) => {
+        if (disposed) fn()
+        else unlisten = fn
+      })
+
+    return () => {
+      disposed = true
+      unlisten?.()
+    }
+  }, [runningInTauri])
 
   useEffect(() => {
     document.documentElement.style.setProperty('--window-opacity', String(settings.opacity))
@@ -145,7 +181,7 @@ function App() {
         event.preventDefault()
         void (async () => {
           try {
-            await listRef.current?.flush()
+            await flushPending()
             await addEntry()
           } catch {
             // 保留当前草稿。
@@ -158,7 +194,7 @@ function App() {
     }
     window.addEventListener('keydown', handleShortcut)
     return () => window.removeEventListener('keydown', handleShortcut)
-  }, [addEntry, isSimple, selectedEntryId])
+  }, [addEntry, flushPending, isSimple, selectedEntryId])
 
   return (
     <div
@@ -217,6 +253,7 @@ function App() {
 
       {isSimple ? (
         <SimpleBoard
+          ref={simpleBoardRef}
           entries={entries}
           loading={loading}
           onAdd={addEntry}
